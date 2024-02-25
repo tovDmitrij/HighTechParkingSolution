@@ -1,0 +1,1 @@
+print("Nya kawaii desu ~~~")
