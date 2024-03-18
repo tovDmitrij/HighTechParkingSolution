@@ -1,3 +1,5 @@
+import json
+
 from flask import Flask, request, jsonify
 import requests
 from dotenv import load_dotenv
@@ -147,20 +149,26 @@ def handle_callback_query(data):
 
 
     # Обработка нажатия на кнопку "camera_<camera_id>"
-    if callback_data.startswith("camera_"):
-        camera_id = int(callback_data.split("_")[1])
-        try:
-            urlFrame_response = requests.get(f"http://127.0.0.1:5000/api/v1/cameras/{camera_id}")
+        if callback_data.startswith("camera_"):
+            camera_id = int(callback_data.split("_")[1])
+            try:
+                urlFrame_response = requests.get(f"http://127.0.0.1:5000/api/v1/cameras/{camera_id}")
 
-            urlFrame_response.raise_for_status()
+                urlFrame_response.raise_for_status()
 
-            frame = get_camera_frame(urlFrame_response.text)
+                frame = get_camera_frame(urlFrame_response.text)
 
-            if frame:
-                send_photo(chat_id, frame)
-        except requests.exceptions.RequestException as e:
-            print("Error frame receiving:", e)
-            send_message(chat_id, "Ошибка при получении кадра")
+                if frame:
+                    keyboard = {
+                        "inline_keyboard": [
+                            [{"text": "Показать свободные парковочные места", "callback_data": f"show_free_spaces_{camera_id}"}]
+                        ]
+                    }
+                    #send_photo(chat_id, frame)
+                    send_message_with_photo_and_keyboard(chat_id, frame, keyboard)
+            except requests.exceptions.RequestException as e:
+                print("Error frame receiving:", e)
+                send_message(chat_id, "Ошибка при получении кадра")
 
 def send_photo(chat_id, photo):
     token = get_from_env("TELEGRAM_BOT_TOKEN")
@@ -168,7 +176,20 @@ def send_photo(chat_id, photo):
     files = {"photo": photo}
     data = {"chat_id": chat_id}
     requests.post(url, files=files, data=data)
+def send_message_with_photo_and_keyboard(chat_id, photo, keyboard):
+    token = get_from_env("TELEGRAM_BOT_TOKEN")
+    url_send_photo = f"https://api.telegram.org/bot{token}/sendPhoto"
 
+    files = {"photo": photo}
+    data = {
+        "chat_id": chat_id,
+        "reply_markup": json.dumps(keyboard)
+    }
+
+    try:
+        requests.post(url_send_photo, files=files, data=data)
+    except requests.exceptions.RequestException as e:
+        print("Error sending message with photo and keyboard:", e)
 def connect_to_db():
     conn = psycopg2.connect(
         dbname="parking",
