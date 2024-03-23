@@ -3,10 +3,12 @@ import cv2
 import supervision as sv
 
 def predictions(image):
-  '''Метод принимает image (cv2 формат), 
+  '''Метод принимает image, 
   а возвращает список свободных мест, и размеченное изображение'''  
   model = YOLO('parking_model.pt') 
   tracker = sv.ByteTrack() 
+  
+  image = cv2.imread(image)
   
   results = model(image)[0]
   detections = sv.Detections.from_ultralytics(results)
@@ -32,3 +34,4 @@ def predictions(image):
   ]
 
   return freePlace, annotated_image
+
