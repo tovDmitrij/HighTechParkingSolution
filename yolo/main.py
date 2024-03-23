@@ -2,13 +2,12 @@ from ultralytics import YOLO, checks
 import cv2
 import supervision as sv
 
-model = YOLO('best.pt') 
-tracker = sv.ByteTrack() 
-
 def predictions(image):
-  '''Метод принимает image (на данный момент путь до фото), 
-  а возвращает список свободных мест, и размеченное изображение'''
-  image = cv2.imread(image)
+  '''Метод принимает image (cv2 формат), 
+  а возвращает список свободных мест, и размеченное изображение'''  
+  model = YOLO('parking_model.pt') 
+  tracker = sv.ByteTrack() 
+  
   results = model(image)[0]
   detections = sv.Detections.from_ultralytics(results)
   detections = tracker.update_with_detections(detections)
@@ -33,7 +32,3 @@ def predictions(image):
   ]
 
   return freePlace, annotated_image
-
-free, image = predictions('../yolo/test_photo/test2.jpg')
-
-cv2.imwrite('result.jpg', image)
