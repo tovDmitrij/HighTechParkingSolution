@@ -8,9 +8,10 @@ import os
 from os.path import join, dirname
 import psycopg2
 import numpy as np
-#from io import BytesIO
 from PIL import Image
 import io
+from yolo.main import predictions
+
 
 app = Flask(__name__)
 def get_from_env(key):
@@ -28,7 +29,7 @@ def handle_telegram_message():
         text = data["message"]["text"]
 
         if text == "/start":
-
+            message_id = send_waiting_message(chat_id)
             try:
                 cameras_response = requests.get("http://127.0.0.1:5000/api/v1/cameras")
                 cameras_response.raise_for_status()
@@ -41,25 +42,13 @@ def handle_telegram_message():
                                             camera in cameras]
                     }
                     send_message(chat_id, text, keyboard)
-                    
+                    if message_id:
+                        delete_waiting_message(chat_id, message_id)
                 else:
                     send_message(chat_id, "Список камер пустой")
             except requests.exceptions.RequestException as e:
                 print("Error fetching cameras:", e)
                 send_message(chat_id, "Ошибка при получении списка камер")
-        if text =="test":
-            try:
-                urlFrame_response = requests.get(f"http://127.0.0.1:5000/api/v1/cameras/3")
-
-                urlFrame_response.raise_for_status()
-
-                frame = get_camera_frame(urlFrame_response.text)
-
-                if frame:
-                    send_photo(chat_id, frame)
-            except requests.exceptions.RequestException as e:
-                print("Error frame receiving:", e)
-                send_message(chat_id, "Ошибка при получении кадра")
     if "callback_query" in data:
         handle_callback_query(data)
 
@@ -100,28 +89,22 @@ def get_camera_url(camera_id):
         return None
 
 
-'''def get_camera_frame(url):
+def get_camera_frameCV(url):
     try:
         # Загрузка кадра с камеры по URL
         response = requests.get(url)
         response.raise_for_status()
 
         # Преобразование полученных данных в изображение
-        image_array = np.frombuffer(response.content, np.uint8)
-        frame = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+        image = Image.open(io.BytesIO(response.content))
 
-        # Если требуется, здесь можно провести дополнительную обработку кадра
-
-        # Преобразование кадра в формат JPEG для отправки в Telegram
-        success, encoded_image = cv2.imencode('.jpg', frame)
-        if not success:
-            raise Exception("Ошибка при кодировании кадра")
-
-        # Кодирование изображения в base64
-        return BytesIO(encoded_image).getvalue()
+        # Преобразование изображения в массив numpy
+        image_array = np.array(image)
+        return image_array
     except Exception as e:
         print("Error fetching camera frame:", e)
-        return None'''
+        return None
+
 def get_camera_frame(url):
     try:
         # Загрузка кадра с камеры по URL
@@ -146,7 +129,7 @@ def handle_callback_query(data):
         callback_query = data["callback_query"]
         chat_id = callback_query["message"]["chat"]["id"]
         callback_data = callback_query["data"]
-
+        message_id = send_waiting_message(chat_id)
 
     # Обработка нажатия на кнопку "camera_<camera_id>"
         if callback_data.startswith("camera_"):
@@ -161,14 +144,40 @@ def handle_callback_query(data):
                 if frame:
                     keyboard = {
                         "inline_keyboard": [
-                            [{"text": "Показать свободные парковочные места", "callback_data": f"show_free_spaces_{camera_id}"}]
+                            [{"text": "Показать свободные парковочные места", "callback_data": f"showFreeSpaces_{camera_id}"}]
                         ]
                     }
                     #send_photo(chat_id, frame)
                     send_message_with_photo_and_keyboard(chat_id, frame, keyboard)
+                    if message_id:
+                        delete_waiting_message(chat_id, message_id)
+                    return
             except requests.exceptions.RequestException as e:
                 print("Error frame receiving:", e)
                 send_message(chat_id, "Ошибка при получении кадра")
+                return
+        # Обработка нажатия на кнопку "Показать свободные парковочные места"
+        if callback_data.startswith("showFreeSpaces_"):
+            camera_id = int(callback_data.split("_")[1])
+            try:
+                urlFrame_response = requests.get(f"http://127.0.0.1:5000/api/v1/cameras/{camera_id}")
+
+                urlFrame_response.raise_for_status()
+
+                frame = get_camera_frameCV(urlFrame_response.text)
+                arr, freeImg = predictions(frame)
+
+                caption = ", ".join(arr)
+                send_photo_with_caption(chat_id, freeImg, caption)
+                if message_id:
+                    delete_waiting_message(chat_id, message_id)
+                return
+
+            except requests.exceptions.RequestException as e:
+                print("Error frame receiving:", e)
+                send_message(chat_id, "Ошибка при получении размеченного кадра с подписью")
+                return
+
 
 def send_photo(chat_id, photo):
     token = get_from_env("TELEGRAM_BOT_TOKEN")
@@ -176,6 +185,7 @@ def send_photo(chat_id, photo):
     files = {"photo": photo}
     data = {"chat_id": chat_id}
     requests.post(url, files=files, data=data)
+
 def send_message_with_photo_and_keyboard(chat_id, photo, keyboard):
     token = get_from_env("TELEGRAM_BOT_TOKEN")
     url_send_photo = f"https://api.telegram.org/bot{token}/sendPhoto"
@@ -188,8 +198,46 @@ def send_message_with_photo_and_keyboard(chat_id, photo, keyboard):
 
     try:
         requests.post(url_send_photo, files=files, data=data)
+
     except requests.exceptions.RequestException as e:
         print("Error sending message with photo and keyboard:", e)
+
+def send_photo_with_caption(chat_id, image_array, caption):
+    try:
+        # Преобразование массива numpy обратно в изображение
+        image = Image.fromarray(image_array.astype('uint8'))
+
+        # Преобразование изображения в формат JPEG
+        with io.BytesIO() as output:
+            image.save(output, format="JPEG")
+            photo = output.getvalue()
+
+        # Отправка фото с подписью
+        token = get_from_env("TELEGRAM_BOT_TOKEN")
+        url = f"https://api.telegram.org/bot{token}/sendPhoto"
+        files = {"photo": photo}
+        data = {"chat_id": chat_id, "caption": caption}
+        response = requests.post(url, files=files, data=data)
+        response.raise_for_status()
+
+    except Exception as e:
+        print("Error sending photo with caption:", e)
+def send_waiting_message(chat_id):
+    token = get_from_env("TELEGRAM_BOT_TOKEN")
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = {"chat_id": chat_id, "text": "Ожидайте загрузки..."}
+    response = requests.post(url, data=data)
+    response.raise_for_status()
+    return response.json()["result"]["message_id"]
+def delete_waiting_message(chat_id, message_id):
+    try:
+        token = get_from_env("TELEGRAM_BOT_TOKEN")
+        url = f"https://api.telegram.org/bot{token}/deleteMessage"
+        data = {"chat_id": chat_id, "message_id": message_id}
+        response = requests.post(url, data=data)
+        response.raise_for_status()
+    except Exception as e:
+        print("Error deleting waiting message:", e)
 def connect_to_db():
     conn = psycopg2.connect(
         dbname="parking",
